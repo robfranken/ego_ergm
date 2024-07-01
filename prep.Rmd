@@ -270,7 +270,8 @@ egodata <- egor(egos = e,
              ID.vars = list(ego = "ego", 
                             alter = "alter",
                             source = "send",
-                            target = "rec")
+                            target = "rec"),
+             alter_design = list(max = 5)
              )
 
 #labeling/order gender variable
