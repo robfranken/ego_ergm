@@ -1,0 +1,34 @@
+---
+title: "ego.ergm"
+author: "Rob Franken"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+
+```{r, packages}
+#install.packages("ergm.ego")
+library(ergm.ego)
+#library(help='ergm.ego')
+```
+
+
+
+```{r, data}
+data(faux.mesa.high)
+mesa <- faux.mesa.high
+rm(faux.mesa.high)
+
+plot(mesa, vertex.col="Grade")
+
+mesa.ego <- as.egor(mesa)
+
+names(mesa.ego)
+print(mesa.ego)
+
+
+class(mesa.ego)
+class(mesa.ego$ego)
+print(mesa.ego$ego)
+``` 
+

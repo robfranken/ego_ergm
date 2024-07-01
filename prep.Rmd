@@ -1,0 +1,294 @@
+---
+title: "Data preparation"
+bibliography: references.bib
+link-citations: true
+date: "Last compiled on `r format(Sys.time(), '%B, %Y')`"
+output: 
+  html_document:
+    css: tweaks.css
+    toc:  true
+    toc_float: true
+    number_sections: false
+    toc_depth: 2
+    code_folding: show
+    code_download: yes
+---
+
+
+```{r, globalsettings, echo=FALSE, warning=FALSE, results='hide', message=FALSE}
+library(knitr)
+library(tidyverse)
+knitr::opts_chunk$set(echo = TRUE)
+opts_chunk$set(tidy.opts=list(width.cutoff=100),tidy=TRUE, warning = FALSE, message = FALSE,comment = "#>", cache=TRUE, class.source=c("test"), class.output=c("test3"))
+options(width = 100)
+rgl::setupKnitr()
+
+colorize <- function(x, color) {sprintf("<span style='color: %s;'>%s</span>", color, x) }
+```
+
+
+```{r klippy, echo=FALSE, include=TRUE}
+klippy::klippy(position = c('top', 'right'))
+#klippy::klippy(color = 'darkred')
+#klippy::klippy(tooltip_message = 'Click to copy', tooltip_success = 'Done')
+```
+
+
+---  
+
+The following scripts can be used to replicate the data-set of @Franken2024. It may also be obtained by downloading: `r xfun::embed_file("./data_shared/egodata.RDa")`
+
+
+----
+
+# Getting started
+
+To copy the code, click the button in the upper right corner of the code-chunks.
+
+## clean up
+
+```{r, cleanup, results='hide'}
+rm(list=ls())
+gc()
+```
+
+<br>
+
+## general custom functions
+
+- `fpackage.check`: Check if packages are installed (and install if not) in R
+- `fsave`: Function to save data with time stamp in correct directory
+- `fload`: Load R-objects under new names
+- `fshowdf`: Print objects (`tibble` / `data.frame`) nicely on screen in `.Rmd`.
+
+```{r, customfunc, eval=FALSE}
+fpackage.check <- function(packages) {
+    lapply(packages, FUN = function(x) {
+        if (!require(x, character.only = TRUE)) {
+            install.packages(x, dependencies = TRUE)
+            library(x, character.only = TRUE)
+        }
+    })
+}
+
+fsave <- function(x, file, location = "./data/processed/", ...) {
+    if (!dir.exists(location))
+        dir.create(location)
+    datename <- substr(gsub("[:-]", "", Sys.time()), 1, 8)
+    totalname <- paste(location, datename, file, sep = "")
+    print(paste("SAVED: ", totalname, sep = ""))
+    save(x, file = totalname)
+}
+
+
+fload  <- function(fileName){
+  load(fileName)
+  get(ls()[ls() != "fileName"])
+}
+
+fshowdf <- function(x, digits = 2, ...) {
+    knitr::kable(x, digits = digits, "html", ...) %>%
+        kableExtra::kable_styling(bootstrap_options = c("striped", "hover")) %>%
+        kableExtra::scroll_box(width = "100%", height = "300px")
+}
+```
+
+<br>
+
+## necessary packages
+
+- `tidyverse` 
+- `igraph` 
+- `egor`
+
+```{r, packages, eval=FALSE}
+packages = c("tidyverse", "igraph", "egor")
+fpackage.check(packages)
+rm(packages)
+```
+
+----
+
+
+# Download data
+
+Anonymized data-sets of the 'Sports and Friendships' study are deposited in DANS Data Station SSH [@data2022]. To see the code used to anonymize the raw data files, see: https://netchange.netlify.app/prep. For this study, we use wave 3 (Cohort II):
+
+- `r xfun::embed_file("./data/wave3_public.RDa")`
+
+<br>
+
+Download the data, and put the file in the `./data/` folder. But first, make a `./data/` folder: 
+
+```{r, download, eval=F}
+ifelse(!dir.exists("data"), dir.create("data"), FALSE)
+``` 
+
+----
+
+# Import data
+
+Load the downloaded data. First, we clean our environment (but we keep our functions; we need them later on).
+
+```{r, import, eval = FALSE}
+#clean environment, but keep functions
+rm(list = setdiff(ls(), lsf.str()))
+
+#load public data
+data <- fload("./data/wave3_public.RDa")
+```
+
+---
+
+# Data wrangling
+
+```{r, wrangling, eval=FALSE, warning=FALSE}
+#1. ego data-frame:
+egodat <- data.frame(
+  ego = 1:nrow(data), # ego_id
+  gender = data$A1,   # ego gender
+  LR = as.numeric(gsub("[^0-9]", "", data$P1)) # ego left-right placement
+)
+
+#2. list of data-frames of alters
+altdat <- vector("list", nrow(egodat))
+
+#we take alters from the "core discussion network" (i.e., egonet1)
+cdn <- paste0("egonet1.SQ00", sprintf("%d", 1:5), ".")
+
+#and, for now, their gender and LR-placement (according to ego!)
+data %>%
+  select(gender.SQ001.:gender.SQ005.) -> genders
+
+data %>%
+  select(P5.SQ001.:P5.SQ005.) %>%
+  mutate_all(~ as.numeric(gsub("[^0-9.]", "", .))) -> LRs
+
+#loop over all egos;
+for (i in 1:length(altdat)) {
+  
+  #naturally, only for egos who listed at least 1 alter/confidant
+
+  if(sum(data[i, cdn] != "") > 0) {
+    
+    altdat[[i]] <- data.frame(
+      ego = rep(i, length(grep("p", data[i, cdn]))),
+      alter = NA,
+      gender = NA,
+      LR = NA)
+
+    #make unique alter-id
+    altdat[[i]]$alter <- as.numeric(paste0(i, "0", grep("p", data[i, cdn])))
+    
+    #retrieve alters attributes
+    altdat[[i]]$gender <- as.vector(unlist(genders[i, 1:nrow(altdat[[i]])]))
+    altdat[[i]]$LR <- as.vector(unlist(LRs[i, 1:nrow(altdat[[i]])]))
+  }
+}
+
+#3. list of edge lists (alter-alter ties, nested in ego)
+
+aatie <- vector("list", nrow(egodat))
+
+for (i in 1:length(aatie)) {
+  
+  #only for egos/list elements containing at least 2 alters:
+  netsize <- sum(data[i, cdn] != "")
+  
+  if(netsize > 1) {
+    
+    #make list of adjacency matrices
+    adjL <- list()
+    
+    {
+      #2 alters
+      adjL[[2]] <- matrix(NA,ncol=2,nrow=2)
+      adjL[[2]][1,2] <- adjL[[2]][2,1] <- data$adj1N2a.SQ001.[i]
+
+      #3 alters
+      adjL[[3]] <- matrix(NA,ncol=3,nrow=3)
+      adjL[[3]][1,2] <- adjL[[3]][2,1] <- data$adj1N3a.SQ001.[i]
+      adjL[[3]][1,3] <- adjL[[3]][3,1] <- data$adj1N3a.SQ002.[i]
+      adjL[[3]][2,3] <- adjL[[3]][3,2] <- data$adj1N3b.SQ001.[i]
+    
+      #4 alters
+      adjL[[4]] <- matrix(NA,ncol=4,nrow=4)
+      adjL[[4]][1,2] <- adjL[[4]][2,1] <- data$adj1N4a.SQ001.[i]
+      adjL[[4]][1,3] <- adjL[[4]][3,1] <- data$adj1N4a.SQ002.[i]
+      adjL[[4]][1,4] <- adjL[[4]][4,1] <- data$adj1N4a.SQ003.[i]
+      adjL[[4]][2,3] <- adjL[[4]][3,2] <- data$adj1N4b.SQ001.[i]
+      adjL[[4]][2,4] <- adjL[[4]][4,2] <- data$adj1N4b.SQ002.[i]
+      adjL[[4]][3,4] <- adjL[[4]][4,3] <- data$adj1N4c.SQ001.[i]
+    
+      #5 alters
+      adjL[[5]] <- matrix(NA,ncol=5,nrow=5)
+      adjL[[5]][1,2] <- adjL[[5]][2,1] <- data$adj1N5a.SQ001.[i]
+      adjL[[5]][1,3] <- adjL[[5]][3,1] <- data$adj1N5a.SQ002.[i]
+      adjL[[5]][1,4] <- adjL[[5]][4,1] <- data$adj1N5a.SQ003.[i]
+      adjL[[5]][1,5] <- adjL[[5]][5,1] <- data$adj1N5a.SQ004.[i]
+      adjL[[5]][2,3] <- adjL[[5]][3,2] <- data$adj1N5b.SQ001.[i]
+      adjL[[5]][2,4] <- adjL[[5]][4,2] <- data$adj1N5b.SQ002.[i]
+      adjL[[5]][2,5] <- adjL[[5]][5,2] <- data$adj1N5b.SQ003.[i]
+      adjL[[5]][3,4] <- adjL[[5]][4,3] <- data$adj1N5c.SQ001.[i]
+      adjL[[5]][3,5] <- adjL[[5]][5,3] <- data$adj1N5c.SQ002.[i]
+      adjL[[5]][4,5] <- adjL[[5]][5,4] <- data$adj1N5d.SQ001.[i]
+    }
+    
+    #take the list entry (i.e., matrix) corresponding to the CDN/network size of ego i
+    mat <- adjL[[netsize]]
+    
+    #alter-alter ties that are (very) close are 1; others are 0
+    mat <- apply(mat, c(1,2), function(x) ifelse(x %in% c("Erg hecht", "Hecht"), 1, 0))
+    
+    #to edgelist (i.e., find indices where value is 1)
+    edge_list <- which(mat == 1, arr.ind = TRUE)
+    
+    #modify values such that they reflect unique alter-ids of altdat
+    
+    if(nrow(edge_list) > 0) {
+      edge_list <- matrix(paste0(i, "0", edge_list), ncol=2)
+    }
+    
+    #attach ego id
+    edge_list <- cbind(i, edge_list)
+    colnames(edge_list) <- c("ego", "send", "rec")
+    
+    #put in list
+    aatie[[i]] <- edge_list
+  }
+}
+
+# convert data.frames totibble
+e <- as_tibble(egodat)
+a <- as_tibble(do.call(rbind, altdat))
+aa <- as_tibble(do.call(rbind, aatie))
+
+# convert to egor object
+egodata <- egor(egos = e,
+             alters = a,
+             aaties = aa,
+             ID.vars = list(ego = "ego", 
+                            alter = "alter",
+                            source = "send",
+                            target = "rec")
+             )
+
+#labeling/order gender variable
+egodata$ego$gender[egodata$ego$gender == "Overige"] <- "Ander"
+egodata$ego$gender <- factor(egodata$ego$gender, levels = c("Man", "Vrouw", "Ander"))
+egodata$alter$gender <- factor(egodata$alter$gender, levels = c("Man", "Vrouw", "Ander"))
+```
+
+----
+
+# Save data set
+
+```{r, fsave, eval = FALSE}
+fsave(egodata, "egodata.Rda")
+```
+
+
+----
+
+### References
+
